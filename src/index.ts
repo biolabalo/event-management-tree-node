@@ -8,7 +8,7 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-console.log(process.env.DATABASE_URL, '.........')
+// console.log(process.env.DATABASE_URL, '.........')
 
 const { Pool } = pg;
 
@@ -16,33 +16,39 @@ const app = express();
 const PORT = 3000;
 
 const pool = new Pool({
-  connectionString: process.env.DB_URL,
+  connectionString: process.env.DATABASE_URL
 });
 
 // Create the categories and events tables
 (async () => {
-  const createCategoriesTableQuery = `
-    CREATE TABLE IF NOT EXISTS categories (
-      id SERIAL PRIMARY KEY,
-      label VARCHAR(255) NOT NULL,
-      parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE
-    );
-  `;
+  const dropCategoriesTableQuery = 'DROP TABLE IF EXISTS categories CASCADE;';
+  const dropEventsTableQuery = 'DROP TABLE IF EXISTS events CASCADE;';
 
   const createEventsTableQuery = `
     CREATE TABLE IF NOT EXISTS events (
       id SERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL,
-      category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL
+      name VARCHAR(255) NOT NULL
+    );
+  `;
+
+  const createCategoriesTableQuery = `
+    CREATE TABLE IF NOT EXISTS categories (
+      id SERIAL PRIMARY KEY,
+      label VARCHAR(255) NOT NULL,
+      parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+      event_id INTEGER REFERENCES events(id) ON DELETE CASCADE
     );
   `;
 
   try {
-    await pool.query(createCategoriesTableQuery);
-    console.log('Categories table created successfully.');
+    await pool.query(dropCategoriesTableQuery);
+    await pool.query(dropEventsTableQuery);
 
     await pool.query(createEventsTableQuery);
     console.log('Events table created successfully.');
+
+    await pool.query(createCategoriesTableQuery);
+    console.log('Categories table created successfully.');
   } catch (error) {
     console.error('Error creating tables:', error);
   }
@@ -54,15 +60,38 @@ app.get('/', (req, res) => {
   res.send('Event Management API is running!');
 });
 
-// Add a category
+// Add an event
+app.post('/events', async (req: Request, res: Response) => {
+  const { name } = req.body;
+
+  try {
+    const result = await pool.query(
+      'INSERT INTO events (name) VALUES ($1) RETURNING *',
+      [name]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding event:', error);
+    res.status(500).json({ error: 'Failed to add event' });
+  }
+});
+
+// Add a category tied to an event
 app.post('/categories', async (req: Request, res: Response) => {
-  const { label, parentId } = req.body;
+  const { label, parentId, eventId } = req.body;
 
   try {
     const result = await pool.query(
       'INSERT INTO categories (label, parent_id) VALUES ($1, $2) RETURNING *',
       [label, parentId || null]
     );
+
+    // Associate the category with the event
+    await pool.query(
+      'UPDATE events SET category_id = $1 WHERE id = $2',
+      [result.rows[0].id, eventId]
+    );
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error adding category:', error);
